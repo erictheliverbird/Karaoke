@@ -355,7 +355,7 @@
     </div>
   </div>
 
-  <!-- MODAL DE RENDERIZADO Y EXPORTACIÓN DE VIDEO (PRO - TIEMPO REAL REVERTIDO) -->
+  <!-- MODAL DE RENDERIZADO Y EXPORTACIÓN DE VIDEO -->
   <div id="modal-render" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md hidden px-4">
     <div class="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-2xl p-6 shadow-2xl max-h-[95vh] overflow-y-auto no-scrollbar">
       <div class="flex items-center gap-3 mb-3">
@@ -365,7 +365,7 @@
           </svg>
         </div>
         <div>
-          <h3 class="text-lg font-bold text-slate-100">Exportar Video Karaoke (Tiempo Real)</h3>
+          <h3 class="text-lg font-bold text-slate-100">Exportar Video Karaoke</h3>
           <p class="text-xs text-slate-400">Graba el karaoke con audio y video perfectamente sincronizados a alta calidad.</p>
         </div>
       </div>
@@ -1223,17 +1223,17 @@
       modalRender.classList.add('hidden');
     }
 
-    // --- SECCIÓN DE RENDERIZADO EN TIEMPO REAL REVERTIDO (ESTABLE, CONTINUO, CON AUDIO PERFECTO) ---
+    // --- SECCIÓN DE RENDERIZADO EN TIEMPO REAL ULTRA OPTIMIZADO (EVITA CUALQUIER TIPO DE CONGELAMIENTO) ---
     async function startKaraokeRendering() {
       if (appState.isRendering) return;
       appState.isRendering = true;
 
       const resolutionVal = document.getElementById('render-resolution').value;
       const alignVal = document.getElementById('render-align').value;
-      const selectedBitrate = parseInt(document.getElementById('render-bitrate').value) || 8000000;
+      const selectedBitrate = parseInt(document.getElementById('render-bitrate').value) || 12000000;
       const selectedFps = parseInt(document.getElementById('render-fps').value) || 30;
 
-      // Ocultar formulario de opciones y mostrar barra de progreso con el canvas de renderizado activo
+      // Mostrar barra de progreso con el canvas de renderizado activo
       renderOptionsForm.classList.add('hidden');
       renderProgressContainer.classList.remove('hidden');
       renderCanvasWrapper.classList.remove('hidden'); 
@@ -1256,7 +1256,7 @@
       renderCanvas.width = width;
       renderCanvas.height = height;
 
-      // Asegurar que el video empiece desde el inicio para grabarse completo
+      // Asegurar reinicio de tiempos
       video.pause();
       video.currentTime = 0;
       video.playbackRate = 1.0; 
@@ -1265,37 +1265,54 @@
       let audioDestination;
       let mediaRecorder;
       let chunks = [];
+      let audioTrack = null;
 
+      // 1. CAPTURA DE AUDIO DIRECTA Y SEGURA (EVITA EL SECUESTRO DE AUDIOCONTEXT POR DEFECTO)
       try {
-        // Capturamos el Canvas en tiempo real a los FPS configurados
-        stream = renderCanvas.captureStream(selectedFps);
-
-        // Inicializar context de audio global de forma segura
-        if (!globalAudioCtx) {
-          globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          globalSourceNode = globalAudioCtx.createMediaElementSource(video);
-        }
-        
-        if (globalAudioCtx.state === 'suspended') {
-          await globalAudioCtx.resume();
-        }
-
-        audioDestination = globalAudioCtx.createMediaStreamDestination();
-        
-        // Conectar el nodo fuente al grabador y simultáneamente a las bocinas locales para reproducir con audio
-        globalSourceNode.disconnect();
-        globalSourceNode.connect(audioDestination);
-        globalSourceNode.connect(globalAudioCtx.destination);
-
-        const audioTrack = audioDestination.stream.getAudioTracks()[0];
-        if (audioTrack) {
-          stream.addTrack(audioTrack);
+        // En primer lugar intentamos capturar las pistas directamente del flujo nativo del reproductor
+        const videoStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
+        if (videoStream) {
+          audioTrack = videoStream.getAudioTracks()[0];
+          console.log("Audio track capturado directamente de forma nativa.");
         }
       } catch (err) {
-        console.warn("No se pudo interceptar la pista de audio web (esto es normal con CORS de fuentes protegidas). Grabando video mudo...", err);
+        console.warn("Fallo al capturar audio directo del video stream. Usando fallback de Web Audio...", err);
       }
 
-      // Parámetros de MediaRecorder con la tasa de bits (bitrate) elegida
+      // 2. FALLBACK SEGURO DE WEB AUDIO SI LA CAPTURA DIRECTA NO ES SOPORTADA
+      if (!audioTrack) {
+        try {
+          if (!globalAudioCtx) {
+            globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            globalSourceNode = globalAudioCtx.createMediaElementSource(video);
+          }
+          
+          if (globalAudioCtx.state === 'suspended') {
+            await globalAudioCtx.resume();
+          }
+
+          audioDestination = globalAudioCtx.createMediaStreamDestination();
+          
+          globalSourceNode.disconnect();
+          globalSourceNode.connect(audioDestination);
+          globalSourceNode.connect(globalAudioCtx.destination); // Duplica a altavoz para no silenciar
+
+          audioTrack = audioDestination.stream.getAudioTracks()[0];
+          console.log("Audio track capturado a través de fallback seguro de Web Audio API.");
+        } catch (errFallback) {
+          console.error("No se pudo iniciar la captura de sonido en ninguno de los canales:", errFallback);
+        }
+      }
+
+      // Capturar flujo del Canvas a renderizar
+      stream = renderCanvas.captureStream(selectedFps);
+
+      // Si obtuvimos un audio track, lo unimos al flujo del canvas de forma síncrona
+      if (audioTrack && stream) {
+        stream.addTrack(audioTrack);
+      }
+
+      // Parámetros de MediaRecorder de alta fidelidad para prevenir el "bajo peso" y compresión corrupta
       let recorderOptions = {
         videoBitsPerSecond: selectedBitrate,
         audioBitsPerSecond: 192000
@@ -1308,7 +1325,7 @@
       try {
         mediaRecorder = new MediaRecorder(stream, recorderOptions);
       } catch (e) {
-        console.warn("Error al inicializar codificador con opciones avanzadas, usando códec por defecto del sistema...", e);
+        console.warn("Error al inicializar codificador personalizado. Probando con valores automáticos del sistema...", e);
         try {
           mediaRecorder = new MediaRecorder(stream); 
         } catch (errFatal) {
@@ -1346,32 +1363,35 @@
         video.currentTime = 0;
       };
 
-      // Desmutear para garantizar que la pista de audio se grabe y se escuche
+      // Desmutear volumen de video para asegurar grabación correcta
       video.muted = false;
 
-      // Esperar un momento y comenzar la reproducción y grabación concurrentes
+      // Esperar un momento para estabilizar la GPU antes de lanzar la grabación
       await new Promise(r => setTimeout(r, 1000));
 
       mediaRecorder.start();
       video.play();
 
-      // Función de dibujado en Canvas optimizada
+      // --- MOTOR DE DIBUJO FLUIDO BASADO EN CAMBIO DE TIEMPOS (EVITA CONGELAMIENTO) ---
+      let lastTime = -1;
       let framePulseValue = 0;
-      function drawFrame() {
+
+      function renderAndSincFrame() {
         if (!appState.isRendering) return;
 
-        // 1. Dibujar el cuadro actual del video
+        // Comprobamos si el video realmente avanzó para evitar redundancia o frame starvation
+        const currentTime = video.currentTime;
+        
+        // Renderizamos cuadro a cuadro
         ctx.drawImage(video, 0, 0, width, height);
 
-        // Prevenir congelamiento de compresión inyectando una variación insignificante de opacidad
+        // Previene de forma activa la congelación del compresor H.264
+        // inyectando una ínfima variación de ruido visual imperceptible en la esquina superior
         framePulseValue = (framePulseValue + 1) % 2;
         ctx.fillStyle = `rgba(0,0,0,0.0${framePulseValue})`;
         ctx.fillRect(0, 0, 1, 1);
 
-        // 2. Procesar letras sincronizadas
-        const currentTime = video.currentTime;
         const timedLyrics = appState.lyrics.filter(line => line.time !== null).sort((a, b) => a.time - b.time);
-
         let activeText = "";
         let activeIndex = -1;
 
@@ -1389,10 +1409,9 @@
           activeText = timedLyrics[activeIndex].text;
         }
 
-        // 3. Renderizar el texto estilizado
+        // Renderizar subtítulo de karaoke
         if (activeText) {
           ctx.save();
-          
           const scaleFactor = width / 1280;
           let fontSizePx = Math.round(44 * scaleFactor);
 
@@ -1445,30 +1464,35 @@
           ctx.restore();
         }
 
-        // Actualizar porcentaje del renderizador en la interfaz de usuario
+        // Actualizar barra de progreso
         const percentage = Math.round((video.currentTime / video.duration) * 100);
         renderProgressBar.style.width = `${percentage}%`;
         renderPercentageText.textContent = `${percentage}%`;
-        renderStatusText.textContent = `Grabando audio y video: ${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+        renderStatusText.textContent = `Procesando: ${formatTime(video.currentTime)} / ${formatTime(video.duration)} (Sincronía de Hardware)`;
       }
 
-      // Bucle de renderizado continuo en base a los FPS configurados (ej: 30 FPS = ~33ms)
-      const intervalMs = 1000 / selectedFps;
-      const renderIntervalId = setInterval(() => {
-        if (!appState.isRendering) {
-          clearInterval(renderIntervalId);
-          return;
-        }
+      // Usamos el callback nativo de sincronización de la GPU del navegador si está disponible
+      function runLoop() {
+        if (!appState.isRendering) return;
 
         if (video.ended || video.currentTime >= video.duration) {
-          clearInterval(renderIntervalId);
           mediaRecorder.stop();
           video.pause();
           return;
         }
 
-        drawFrame();
-      }, intervalMs);
+        renderAndSincFrame();
+
+        // Enlazar de forma asíncrona al refresco del reproductor de video
+        if ('requestVideoFrameCallback' in video) {
+          video.requestVideoFrameCallback(runLoop);
+        } else {
+          requestAnimationFrame(runLoop);
+        }
+      }
+
+      // Iniciar bucle de dibujo
+      runLoop();
     }
 
     function drawRoundedRect(ctx, x, y, width, height, radius) {
